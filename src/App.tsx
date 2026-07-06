@@ -57,6 +57,7 @@ function App() {
             workflow={workflow}
             tasks={tasks}
             onSelectTask={setSelectedTask}
+            onMove={handleMove}
           />
           <TaskDetail task={selectedTask} columns={workflow.columns} onMove={handleMove} onClose={() => setSelectedTask(null)} />
         </div>

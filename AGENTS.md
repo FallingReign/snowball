@@ -114,7 +114,21 @@ most components we need. If it cannot cover a need, we will stand up a consisten
 local component library later — do NOT invent one-off components per feature.
 To add cascade-ui components: `npx shadcn@latest add FallingReign/cascade-ui/<component>`.
 
+## Slice 2 additions (Drag-and-drop / board interactions, 2026-07)
+
+- **Drag-and-drop**: `@dnd-kit/core` (+ `@dnd-kit/utilities` which ships as a
+  transitive dep). Cards are `useDraggable`; columns are `useDroppable`.
+  `DndContext` lives in `Board` with a single `onDragEnd` handler.
+- **WIP enforcement** is done client-side in `onDragEnd`: if the target column
+  is at its `wipLimit`, the drop is silently blocked (card snaps back). The
+  column turns red (`border-destructive / bg-destructive/10`) when `atLimit`.
+- **Task detail**: already present from Slice 1; shows title, status (editable
+  via dropdown), actor, acceptance criteria, exit criteria, event log.
+- `Board` now accepts `onMove: (taskId, newStatus) => Promise<void>` —
+  threaded from `App.tsx`'s `handleMove` through `DndContext.onDragEnd`.
+  Keep the signature open to non-human initiators (don't add `initiator` yet;
+  it can be added when agent moves are needed).
+
 ## What's out of scope (Slice 1 + Astro follow-up)
 
-- Drag-and-drop, WIP enforcement UI, task-detail polish → Slice 2
 - Agent/worker/Copilot-CLI features → far-future YAGNI
