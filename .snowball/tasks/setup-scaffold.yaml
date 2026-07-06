@@ -1,0 +1,17 @@
+id: setup-scaffold
+title: "Set up Tauri + React scaffold"
+status: done
+actor: human
+
+acceptance_criteria:
+  - Tauri v2 + React + TypeScript scaffold initialised in repo root
+  - npm run build succeeds (Vite + tsc)
+  - cargo check passes in src-tauri
+
+exit_criteria:
+  - Skeleton compiles end-to-end with stub commands returning static data
+  - All module boundaries wired in lib.rs
+
+event_log:
+  - timestamp: "2026-07-04T21:00:00+10:00"
+    message: "Scaffold created via outside-in Phase 2"

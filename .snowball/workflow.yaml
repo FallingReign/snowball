@@ -1,0 +1,23 @@
+name: Snowball
+
+columns:
+  - id: backlog
+    name: Backlog
+    wip_limit: null
+  - id: in-progress
+    name: In Progress
+    wip_limit: 3
+  - id: review
+    name: Review
+    wip_limit: 2
+  - id: done
+    name: Done
+    wip_limit: null
+
+actors:
+  - id: human
+    name: Human
+    kind: human
+  - id: agent
+    name: Copilot Agent
+    kind: agent

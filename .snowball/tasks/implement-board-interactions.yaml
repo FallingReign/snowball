@@ -1,0 +1,15 @@
+id: implement-board-interactions
+title: "Implement board card movement and WIP limit enforcement"
+status: backlog
+actor: human
+
+acceptance_criteria:
+  - Cards can be dragged between columns
+  - WIP limit is enforced; column turns red when at limit
+  - Moving a card calls update_task_status
+
+exit_criteria:
+  - Manual card movement works without console errors
+  - WIP limit violation is visually indicated
+
+event_log: []

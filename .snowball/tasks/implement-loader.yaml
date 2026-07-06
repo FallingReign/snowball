@@ -1,0 +1,18 @@
+id: implement-loader
+title: "Implement workflow and task YAML loaders"
+status: done
+actor: agent
+
+acceptance_criteria:
+  - load_workflow reads .snowball/workflow.yaml relative to runtime working directory
+  - list_tasks reads all .snowball/tasks/*.yaml files sorted deterministically
+  - update_task_status writes status field back to the correct task YAML
+  - Validation rejects unknown statuses, empty ids, duplicate column ids
+
+exit_criteria:
+  - Adding a new task YAML creates a card in the correct column without code changes
+  - Moving a card persists the new status to disk
+
+event_log:
+  - timestamp: "2026-07-04T22:05:44+10:00"
+    message: "Loaders implemented with serde_yaml; 11 unit tests passing"
