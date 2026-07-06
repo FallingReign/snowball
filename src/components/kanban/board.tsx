@@ -16,7 +16,13 @@ interface BoardProps {
 }
 
 export function Board({ workflow, tasks, onSelectTask, onMove }: BoardProps) {
-  const sensors = useSensors(useSensor(PointerSensor));
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // Require a small movement before activating drag so that plain
+      // clicks are never swallowed by the drag interaction.
+      activationConstraint: { distance: 8 },
+    }),
+  );
 
   const tasksByColumn = (col: ColumnType): Task[] =>
     tasks.filter((t) => t.status === col.id);

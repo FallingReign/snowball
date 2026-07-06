@@ -28,9 +28,12 @@ export function Card({ task, onSelect }: CardProps) {
         isDragging ? "opacity-50" : "",
       ].join(" ")}
     >
-      <p className="font-medium">{task.title}</p>
+      <p className="font-medium text-sm leading-snug">{task.title}</p>
       {task.actor && (
-        <span className="text-xs text-muted-foreground">{task.actor}</span>
+        <span className="mt-2 inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+          <span aria-hidden="true">👤</span>
+          {task.actor}
+        </span>
       )}
     </button>
   );
