@@ -3,7 +3,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppShell } from "@/components/ui/app-shell";
 import { Board } from "./components/kanban/board";
 import { TaskDetail } from "./components/task/task-detail";
-import { loadWorkflow, listTasks, updateTaskStatus } from "./lib/tauri";
+import { loadWorkflow, listTasks, updateTaskStatus } from "./lib/api";
 import type { Task, Workflow } from "./lib/types";
 
 function App() {
