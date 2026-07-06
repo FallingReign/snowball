@@ -1,46 +1,49 @@
 /**
- * src/lib/api.ts — Deno Desktop bindings bridge
+ * src/lib/api.ts — HTTP API bridge for the React frontend.
  *
- * Deno Desktop injects a `bindings` Proxy into the webview's global scope.
- * Each property access on the Proxy returns a function that, when called,
- * forwards the invocation to the matching win.bind(name, handler) registered
- * in main.ts, crossing the Deno <-> webview boundary over an in-process channel.
+ * Replaces the old Deno Desktop bindings bridge. The React islands call
+ * these functions; they delegate to Astro API routes via fetch. The Astro
+ * server routes call the TypeScript engine server-side (in Deno Desktop's
+ * Deno runtime), which reads/writes the .snowball/ YAML files.
  *
- * Arguments and return values are JSON-serialised (plain data only — no Date,
- * Map, Set, class instances; stick to the interfaces in types.ts).
+ * All paths are relative to the server origin so they work in both dev
+ * (astro dev on :4321) and production (deno desktop . running dist/).
  */
 
 import type { Task, Workflow } from "./types";
 
-// ---------------------------------------------------------------------------
-// TypeScript declaration for the Deno Desktop `bindings` global.
-// The runtime object is injected before the page loads; this declaration
-// purely gives the TypeScript compiler type information.
-// ---------------------------------------------------------------------------
-declare global {
-  // deno-lint-ignore no-var
-  var bindings: {
-    loadWorkflow(): Promise<Workflow>;
-    listTasks(): Promise<Task[]>;
-    updateTaskStatus(taskId: string, newStatus: string): Promise<void>;
-  };
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(path, init);
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const body = await res.json() as { error?: string };
+      if (body.error) msg = body.error;
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(msg);
+  }
+  return res;
 }
 
-// ---------------------------------------------------------------------------
-// Public API — identical signatures to the old tauri.ts; no App.tsx changes.
-// ---------------------------------------------------------------------------
-
 export async function loadWorkflow(): Promise<Workflow> {
-  return globalThis.bindings.loadWorkflow();
+  const res = await apiFetch("/api/workflow");
+  return res.json() as Promise<Workflow>;
 }
 
 export async function listTasks(): Promise<Task[]> {
-  return globalThis.bindings.listTasks();
+  const res = await apiFetch("/api/tasks");
+  return res.json() as Promise<Task[]>;
 }
 
 export async function updateTaskStatus(
   taskId: string,
   newStatus: string,
 ): Promise<void> {
-  return globalThis.bindings.updateTaskStatus(taskId, newStatus);
+  await apiFetch("/api/update-task", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taskId, newStatus }),
+  });
 }

@@ -26,3 +26,6 @@ dist-ssr
 # Deno cache
 .deno/
 deno.lock
+
+# Astro auto-generated
+.astro/
