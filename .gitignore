@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Deno cache
+.deno/
+deno.lock
+
+# Astro auto-generated
+.astro/

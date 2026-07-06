@@ -1,0 +1,21 @@
+---
+// src/pages/index.astro
+// The App component is a client-only React island.
+// It fetches board data via /api/workflow and /api/tasks once hydrated.
+import App from "../App";
+import "../index.css";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Snowball</title>
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  </head>
+  <body style="margin:0;height:100dvh;overflow:hidden;">
+    <!-- client:only prevents SSR; the component mounts and fetches data in the browser -->
+    <App client:only="react" />
+  </body>
+</html>

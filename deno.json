@@ -1,0 +1,22 @@
+{
+  "tasks": {
+    "dev": "deno desktop --hmr --allow-read --allow-write --allow-env --allow-net --allow-sys .",
+    "build": "npm run build && deno desktop --allow-read --allow-write --allow-env --allow-net --allow-sys --output dist/Snowball.exe .",
+    "start": "npm run build && deno desktop --allow-read --allow-write --allow-env --allow-net --allow-sys .",
+    "test": "deno test --allow-read --allow-write --allow-env engine/"
+  },
+  "desktop": {
+    "app": {
+      "name": "Snowball",
+      "identifier": "com.snowball.app",
+      "icons": {
+        "windows": "./icons/icon.ico",
+        "linux": "./icons/icon.png"
+      }
+    }
+  },
+  "imports": {
+    "jsr:@std/yaml": "jsr:@std/yaml@^1",
+    "jsr:@std/assert": "jsr:@std/assert@^1"
+  }
+}
