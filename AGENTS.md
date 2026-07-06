@@ -63,13 +63,22 @@ engine files need not change.
 ### Run / build commands
 
 ```bash
-deno task dev       # astro dev via deno desktop --hmr  (HMR, port 4321)
+npm install         # install node_modules (required on fresh checkout before any build)
+deno task dev       # npm run build + deno desktop --hmr  (builds then opens window)
 npm run dev         # astro dev standalone (no Deno Desktop window, browser only)
 deno task test      # deno test engine/  (14 tests)
 npm run build       # astro build → dist/
 deno task build     # npm run build + deno desktop --output dist/Snowball.exe .
 deno task start     # npm run build + deno desktop .  (run prod locally)
 ```
+
+### Dev workflow note (Slice 3 fix)
+
+`deno desktop --hmr` (Deno Desktop's Astro auto-detection) synthesises an entry
+that imports `dist/server/entry.mjs`. That file only exists after an Astro build,
+so `deno task dev` now chains `npm run build &&` before the `deno desktop --hmr`
+command. A pre-build is always required; without it Deno Desktop emits a
+TS2307 type-check error at startup and refuses to launch.
 
 ### Permissions required
 
@@ -128,6 +137,15 @@ To add cascade-ui components: `npx shadcn@latest add FallingReign/cascade-ui/<co
   threaded from `App.tsx`'s `handleMove` through `DndContext.onDragEnd`.
   Keep the signature open to non-human initiators (don't add `initiator` yet;
   it can be added when agent moves are needed).
+
+## Slice 3 additions (Board polish, 2026-07)
+
+- **Click vs drag**: `PointerSensor` in `Board` uses `activationConstraint: { distance: 8 }`
+  so plain clicks are not swallowed. Moving the pointer ≥ 8 px triggers drag;
+  less than that fires the `onClick` → opens task detail panel.
+- **Actor badge**: Each `Card` shows the actor as a pill badge (`rounded-full border
+  border-border bg-muted`) so assignment is visible at a glance on the board.
+  Read-only display; badge uses emoji 👤 + actor name.
 
 ## What's out of scope (Slice 1 + Astro follow-up)
 

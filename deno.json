@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "dev": "deno desktop --hmr --allow-read --allow-write --allow-env --allow-net --allow-sys .",
+    "dev": "npm run build && deno desktop --hmr --allow-read --allow-write --allow-env --allow-net --allow-sys .",
     "build": "npm run build && deno desktop --allow-read --allow-write --allow-env --allow-net --allow-sys --output dist/Snowball.exe .",
     "start": "npm run build && deno desktop --allow-read --allow-write --allow-env --allow-net --allow-sys .",
     "test": "deno test --allow-read --allow-write --allow-env engine/"
