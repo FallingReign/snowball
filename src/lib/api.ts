@@ -1,16 +1,8 @@
 /**
  * src/lib/api.ts — HTTP API bridge for the React frontend.
- *
- * Replaces the old Deno Desktop bindings bridge. The React islands call
- * these functions; they delegate to Astro API routes via fetch. The Astro
- * server routes call the TypeScript engine server-side (in Deno Desktop's
- * Deno runtime), which reads/writes the .snowball/ YAML files.
- *
- * All paths are relative to the server origin so they work in both dev
- * (astro dev on :4321) and production (deno desktop . running dist/).
  */
 
-import type { Task, Workflow } from "./types";
+import type { Task, Workflow, CriterionCheck } from "./types";
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(path, init);
@@ -46,4 +38,52 @@ export async function updateTaskStatus(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ taskId, newStatus }),
   });
+}
+
+export interface ColumnConfigPayload {
+  wip_limit?: number | null;
+  owner?: { kind: "human" | "agent"; role?: string; instances?: number };
+  exit_criteria?: Array<{ id: string; description: string; kind: "machine" | "human" }>;
+}
+
+export async function updateColumnConfig(
+  columnId: string,
+  update: ColumnConfigPayload,
+): Promise<void> {
+  await apiFetch("/api/update-column", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ columnId, ...update }),
+  });
+}
+
+export async function updateCriteriaChecks(
+  taskId: string,
+  columnId: string,
+  checks: CriterionCheck[],
+): Promise<void> {
+  await apiFetch("/api/update-criteria-checks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taskId, columnId, checks }),
+  });
+}
+
+export interface AgentAdvanceResult {
+  taskId: string;
+  advanced: boolean;
+  nextColumnId: string | null;
+  satisfiedCriteria: string[];
+  unsatisfiedCriteria: string[];
+}
+
+export async function fakeAgentAdvance(
+  columnId: string,
+): Promise<AgentAdvanceResult[]> {
+  const res = await apiFetch("/api/fake-agent-advance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ columnId }),
+  });
+  return res.json() as Promise<AgentAdvanceResult[]>;
 }
