@@ -1,19 +1,18 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "jsr:@std/yaml";
-import type { Task, EventEntry, RawTask, RawWorkflow } from "./types.ts";
+import type {
+  Task,
+  EventEntry,
+  CriterionCheck,
+  RawTask,
+  RawCriterionCheck,
+  RawWorkflow,
+} from "./types.ts";
 import { loadRawWorkflow, columnIds } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
-/**
- * Validate a single raw task against the set of valid workflow column ids.
- * Throws a descriptive Error on the first violation found.
- *
- * @param task           Raw task deserialized from YAML.
- * @param validStatuses  Set of valid column ids from the workflow.
- * @param source         A label used in error messages (e.g. the file path).
- */
 export function validateTask(
   task: RawTask,
   validStatuses: Set<string>,
@@ -45,6 +44,12 @@ function toTask(raw: RawTask): Task {
     actor: raw.actor ?? null,
     acceptanceCriteria: raw.acceptance_criteria ?? [],
     exitCriteria: raw.exit_criteria ?? [],
+    criteriaChecks: (raw.criteria_checks ?? []).map((c): CriterionCheck => ({
+      columnId: c.column_id,
+      criterionId: c.criterion_id,
+      checked: c.checked,
+      checkedAt: c.checked_at,
+    })),
     eventLog: (raw.event_log ?? []).map((e): EventEntry => ({
       timestamp: e.timestamp,
       message: e.message,
@@ -56,13 +61,7 @@ function toTask(raw: RawTask): Task {
 // I/O
 // ---------------------------------------------------------------------------
 
-/**
- * Read all .snowball/tasks/*.yaml files under baseDir, validate them, and
- * return the sorted list of Tasks (sorted by id; files by filename first for
- * deterministic reads).
- */
 export async function listTasks(baseDir: string): Promise<Task[]> {
-  // Load workflow to get valid statuses.
   let raw: RawWorkflow;
   try {
     raw = await loadRawWorkflow(baseDir);
@@ -75,10 +74,7 @@ export async function listTasks(baseDir: string): Promise<Task[]> {
   const entries: Deno.DirEntry[] = [];
   try {
     for await (const entry of Deno.readDir(tasksDir)) {
-      if (
-        entry.isFile &&
-        (entry.name.endsWith(".yaml") || entry.name.endsWith(".yml"))
-      ) {
+      if (entry.isFile && (entry.name.endsWith(".yaml") || entry.name.endsWith(".yml"))) {
         entries.push(entry);
       }
     }
@@ -86,7 +82,6 @@ export async function listTasks(baseDir: string): Promise<Task[]> {
     throw new Error(`Cannot read tasks directory ${tasksDir}: ${e}`);
   }
 
-  // Sort by filename for deterministic reading order.
   entries.sort((a, b) => a.name.localeCompare(b.name));
 
   const tasks: Task[] = [];
@@ -108,24 +103,15 @@ export async function listTasks(baseDir: string): Promise<Task[]> {
     tasks.push(toTask(rawTask));
   }
 
-  // Secondary sort by id for stable ordering regardless of filename.
   tasks.sort((a, b) => a.id.localeCompare(b.id));
-
   return tasks;
 }
 
-/**
- * Update the status field of the task identified by taskId in
- * .snowball/tasks/<taskId>.yaml. All other fields are preserved via YAML
- * round-trip. Throws if the new status is not a valid workflow column or the
- * task file does not exist.
- */
 export async function updateTaskStatus(
   baseDir: string,
   taskId: string,
   newStatus: string,
 ): Promise<void> {
-  // Validate new status against the workflow.
   let raw: RawWorkflow;
   try {
     raw = await loadRawWorkflow(baseDir);
@@ -141,15 +127,12 @@ export async function updateTaskStatus(
   }
 
   const path = `${baseDir}/.snowball/tasks/${taskId}.yaml`;
-
-  // Check that the task file exists.
   try {
     await Deno.stat(path);
   } catch {
     throw new Error(`task '${taskId}' not found (expected ${path})`);
   }
 
-  // Read, update, write — preserving all other fields via the YAML round-trip.
   let content: string;
   try {
     content = await Deno.readTextFile(path);
@@ -177,4 +160,44 @@ export async function updateTaskStatus(
   } catch (e) {
     throw new Error(`Cannot write ${path}: ${e}`);
   }
+}
+
+/**
+ * Update the exit-criteria check state for a specific (task, column) pair.
+ * Replaces existing checks for that column; preserves checks for other columns.
+ */
+export async function updateCriteriaChecks(
+  baseDir: string,
+  taskId: string,
+  columnId: string,
+  checks: CriterionCheck[],
+): Promise<void> {
+  const path = `${baseDir}/.snowball/tasks/${taskId}.yaml`;
+
+  try {
+    await Deno.stat(path);
+  } catch {
+    throw new Error(`task '${taskId}' not found (expected ${path})`);
+  }
+
+  const content = await Deno.readTextFile(path);
+  const doc = parseYaml(content) as Record<string, unknown>;
+
+  // Keep checks for other columns; replace for this column.
+  const existing = ((doc["criteria_checks"] as RawCriterionCheck[] | undefined) ?? [])
+    .filter((c) => c.column_id !== columnId);
+
+  const newChecks: RawCriterionCheck[] = checks.map((c) => {
+    const entry: RawCriterionCheck = {
+      column_id: columnId,
+      criterion_id: c.criterionId,
+      checked: c.checked,
+    };
+    if (c.checkedAt) entry.checked_at = c.checkedAt;
+    return entry;
+  });
+
+  doc["criteria_checks"] = [...existing, ...newChecks];
+
+  await Deno.writeTextFile(path, stringifyYaml(doc));
 }

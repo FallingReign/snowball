@@ -4,15 +4,53 @@ columns:
   - id: backlog
     name: Backlog
     wip_limit: null
+    owner:
+      kind: human
+    exit_criteria:
+      - id: ec-backlog-1
+        description: Acceptance criteria written and agreed
+        kind: human
+      - id: ec-backlog-2
+        description: Task is small enough to complete in one session
+        kind: human
+
   - id: in-progress
     name: In Progress
     wip_limit: 3
+    owner:
+      kind: agent
+      role: code-writer
+      instances: 2
+    exit_criteria:
+      - id: ec-inprogress-1
+        description: All unit tests pass (CI green)
+        kind: machine
+      - id: ec-inprogress-2
+        description: No TODO/FIXME comments left in changed files
+        kind: machine
+      - id: ec-inprogress-3
+        description: Human has reviewed the diff and signed off
+        kind: human
+
   - id: review
     name: Review
     wip_limit: 2
+    owner:
+      kind: human
+    exit_criteria:
+      - id: ec-review-1
+        description: Reviewer approval recorded
+        kind: human
+      - id: ec-review-2
+        description: Lint and type-check pass
+        kind: machine
+
   - id: done
     name: Done
     wip_limit: null
+    owner:
+      kind: human
+    exit_criteria: []
 
 actors:
   - id: human
