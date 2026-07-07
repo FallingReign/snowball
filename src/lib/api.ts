@@ -42,7 +42,18 @@ export async function updateTaskStatus(
 
 export interface ColumnConfigPayload {
   wip_limit?: number | null;
-  owner?: { kind: "human" | "agent"; role?: string; instances?: number };
+  owner?: {
+    kind: "human" | "agent";
+    role?: string;
+    instances?: number;
+    runtime?: "fake" | "copilot-cli";
+    runtime_config?: {
+      cli_path?: string;
+      model?: string;
+      timeout_ms?: number;
+      instructions?: string;
+    };
+  };
   exit_criteria?: Array<{ id: string; description: string; kind: "machine" | "human" }>;
 }
 
@@ -75,6 +86,17 @@ export interface AgentAdvanceResult {
   nextColumnId: string | null;
   satisfiedCriteria: string[];
   unsatisfiedCriteria: string[];
+}
+
+export async function agentAdvance(
+  columnId: string,
+): Promise<AgentAdvanceResult[]> {
+  const res = await apiFetch("/api/agent-advance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ columnId }),
+  });
+  return res.json() as Promise<AgentAdvanceResult[]>;
 }
 
 export async function fakeAgentAdvance(

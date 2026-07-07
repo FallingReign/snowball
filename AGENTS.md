@@ -243,5 +243,94 @@ See "Slice A schema additions" section above.
 
 - **Board layering** (parent↔child boards / `links_to` column field): `links_to` is in the
   schema (always `null`) but no behavior is built.
-- **Real AI adapter**: Slice B. Only `FakeRuntimeAdapter` exists.
-- **Agent advance notifications / toast UI**: Slice B. Currently logged to console.
+- **Agent advance notifications / toast UI**: Slice B partially done (console.info logs results);
+  full in-app notification/toast panel is a later slice.
+- **Parallel-worktree orchestration**: `instances` > 1 is stored in config and respected for WIP
+  limit checks on the board, but the runtime does NOT yet fan out to multiple worktrees / parallel
+  agent processes. Each `runAgentOnColumn` invocation processes tasks sequentially. True parallelism
+  (separate git worktrees per instance) is a Slice C item.
+- **pi adapter**: out of scope for Slice B; only `fake` and `copilot-cli` are built.
+
+## Slice B additions (Copilot CLI adapter + runtime selection, 2026-07)
+
+### New engine files
+
+| File | Purpose |
+|------|---------|
+| `engine/copilot-cli-adapter.ts` | `CopilotCliAdapter` — real Copilot CLI adapter |
+| `engine/agent-runner.ts` | `runAgentOnColumn()` — adapter-agnostic gating loop |
+| `engine/adapter-factory.ts` | `createAdapter(owner)` — maps column config to adapter |
+| `engine/copilot-cli-adapter_test.ts` | 15 unit tests (mock spawn injection) |
+
+### CopilotCliAdapter contract
+
+```typescript
+export class CopilotCliAdapter implements RuntimeAdapter {
+  constructor(config?: CopilotCliConfig, spawnFn?: SpawnFn)
+  readonly name = "copilot-cli";
+  validateMachineCriteria(taskId, columnId, criteria): Promise<CriterionToCheck[]>
+}
+```
+
+**Machine-criteria validation flow:**
+1. Binary check: `copilot --version` (5 s timeout) — throws a clear error if binary is missing or returns non-zero.
+2. For each machine criterion:
+   a. Builds a structured prompt: agent context + optional instructions + criterion text + explicit instruction to end with `VERDICT: PASS` or `VERDICT: FAIL`.
+   b. Runs `copilot -p "<prompt>"` with stdin closed (non-interactive) and a configurable timeout.
+   c. Parses `VERDICT: PASS` / `VERDICT: FAIL` from model output via `parseCopilotVerdict()` (stops at the footer that begins with `Changes`/`AI Credits`/`Tokens`/`Resume`).
+   d. PASS → criterion satisfied; FAIL / no verdict / timeout / non-zero exit → unsatisfied (FAIL).
+3. Human criteria pass through unchanged.
+
+**No arbitrary shell execution.** The adapter reads Copilot's verdict from the model reply — it does NOT run any shell command from the model output. Safe and bounded.
+
+**Headless invocation:** `copilot -p "<prompt>"` with stdin closed. The standalone Copilot CLI 1.0.68 supports this natively; the reply and VERDICT appear before a structured footer section.
+
+**Binary presence check:** `copilot --version` (5 s timeout). If `ENOENT`, throws: *"Copilot CLI binary not found: 'copilot'. Install from https://docs.github.com/copilot/how-tos/copilot-cli"*.
+
+**Already authenticated:** The `copilot` binary is assumed to be authenticated. No `gh auth login` flow is attempted. If auth is missing, `copilot -p` will fail and the criterion is left unsatisfied.
+
+**Timeout:** per-call (default 60 s to accommodate model latency); configurable via `runtime_config.timeout_ms` in workflow.yaml. No process can hang unboundedly — kills via `proc.kill()` after timeout.
+
+**Spawn injection:** `CopilotCliAdapter` accepts an optional `SpawnFn` second constructor argument for unit tests. Tests inject a mock and don't require live Copilot or real subprocesses.
+
+### workflow.yaml extended schema (Slice B additions)
+
+```yaml
+columns:
+  - id: in-progress
+    name: In Progress
+    owner:
+      kind: agent
+      role: code-writer
+      instances: 2
+      runtime: copilot-cli          # "fake" | "copilot-cli"; default: "fake"
+      runtime_config:
+        cli_path: gh                # path to gh binary; default: "gh"
+        instructions: |             # optional prompt context
+          TypeScript project; tests run via `deno task test`.
+        timeout_ms: 60000           # per-call timeout; default: 60000 (model calls ~15 s)
+```
+
+`runtime` and `runtime_config` are optional and backward-compatible. Existing workflows
+default to `runtime: fake`.
+
+### API routes (Slice B additions)
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/agent-advance` | POST | Run configured adapter (fake or copilot-cli) on column |
+
+The `/api/fake-agent-advance` route is preserved for backward compatibility but the UI
+now calls `/api/agent-advance` which reads `owner.runtime` from workflow.yaml.
+
+### Frontend changes (Slice B)
+
+- `ColumnConfig` side sheet: runtime selector (Fake \| Copilot CLI) + CLI path + instructions fields
+- Column badge: shows runtime name next to agent role when non-fake
+- `agentAdvance(columnId)` added to `src/lib/api.ts` (calls `/api/agent-advance`)
+- `onFakeAgentAdvance` prop renamed to `onAgentAdvance` throughout Board/Column/App
+
+### Permissions (updated)
+
+`--allow-run` added to all `deno desktop` invocations in `deno.json` to allow subprocess
+spawning for the Copilot CLI adapter.

@@ -9,7 +9,7 @@ import {
   updateTaskStatus,
   updateColumnConfig,
   updateCriteriaChecks,
-  fakeAgentAdvance,
+  agentAdvance,
 } from "./lib/api";
 import type { Task, Workflow, CriterionCheck } from "./lib/types";
 import type { ColumnConfigPayload } from "./lib/api";
@@ -67,15 +67,14 @@ function App() {
     }
   }
 
-  async function handleFakeAgentAdvance(columnId: string) {
+  async function handleAgentAdvance(columnId: string) {
     try {
-      const results = await fakeAgentAdvance(columnId);
+      const results = await agentAdvance(columnId);
       await reload();
-      // Report blocked cards in a non-intrusive way (console; UI toast would be Slice B)
       const blocked = results.filter((r) => !r.advanced);
       if (blocked.length > 0) {
         console.info(
-          "[fake agent] blocked cards:",
+          "[agent] blocked cards:",
           blocked.map((r) => `${r.taskId}: unsatisfied=[${r.unsatisfiedCriteria.join(",")}]`),
         );
       }
@@ -122,7 +121,7 @@ function App() {
             onMove={handleMove}
             onUpdateColumn={handleUpdateColumn}
             onUpdateCriteriaChecks={handleUpdateCriteriaChecks}
-            onFakeAgentAdvance={handleFakeAgentAdvance}
+            onAgentAdvance={handleAgentAdvance}
           />
           <TaskDetail
             task={selectedTask}
