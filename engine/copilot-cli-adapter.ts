@@ -6,11 +6,11 @@ import type { RuntimeAdapter, CriterionToCheck } from "./runtime-adapter.ts";
 // ---------------------------------------------------------------------------
 
 export interface CopilotCliConfig {
-  /** Path to the gh binary. Default: "gh" */
+  /** Path to the standalone copilot binary. Default: "copilot" */
   cliPath?: string;
   /** Additional instructions injected into every validation prompt. */
   instructions?: string;
-  /** Timeout for each external call (ms). Default: 30 000. */
+  /** Timeout for each external call (ms). Default: 60 000 — model calls take ~15 s. */
   timeoutMs?: number;
 }
 
@@ -73,20 +73,24 @@ export function nodeSpawn(
 // ---------------------------------------------------------------------------
 
 /**
- * CopilotCliAdapter — drives GitHub Copilot CLI in headless/non-interactive
- * mode to validate machine exit criteria.
+ * CopilotCliAdapter — drives the standalone GitHub Copilot CLI (`copilot`)
+ * in non-interactive mode to validate machine exit criteria.
  *
- * For each machine criterion it:
- *   1. Calls `gh copilot suggest --target shell "<validation-prompt>"` with
- *      stdin closed (non-interactive).  The suggestion appears in stdout
- *      before any interactive menu; we parse it immediately.
- *   2. Executes the suggested shell command with a timeout.
- *   3. Treats exit-code 0 as "criterion satisfied".
+ * **Invocation:** `copilot -p "<prompt>"` with stdin closed.
+ * The model replies with reasoning and ends with exactly:
+ *   VERDICT: PASS  (criterion satisfied)
+ *   VERDICT: FAIL  (criterion not satisfied)
  *
- * Requires `gh` CLI (https://cli.github.com) authenticated via `gh auth login`.
- * Fails fast with a descriptive error when unauthenticated or `gh` is missing.
+ * Unparseable / timed-out / errored calls are treated as FAIL.
  *
- * Auth requirement: run `gh auth login` (or set GITHUB_TOKEN) before use.
+ * **No arbitrary shell execution.** The adapter reads Copilot's verdict from
+ * its reply — it does NOT run any shell command the model suggests.
+ *
+ * **Auth:** The binary must already be authenticated (`copilot` is logged in).
+ * If the binary is missing, a clear error is thrown.
+ *
+ * **Spawn injection:** Pass a mock `SpawnFn` as the second constructor argument
+ * to test without live Copilot.
  */
 export class CopilotCliAdapter implements RuntimeAdapter {
   readonly name = "copilot-cli";
@@ -100,9 +104,9 @@ export class CopilotCliAdapter implements RuntimeAdapter {
     config: CopilotCliConfig = {},
     spawnFn: SpawnFn = nodeSpawn,
   ) {
-    this.cliPath = config.cliPath?.trim() || "gh";
+    this.cliPath = config.cliPath?.trim() || "copilot";
     this.instructions = config.instructions?.trim() ?? "";
-    this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.timeoutMs = config.timeoutMs ?? 60_000;
     this._spawn = spawnFn;
   }
 
@@ -111,8 +115,8 @@ export class CopilotCliAdapter implements RuntimeAdapter {
     columnId: string,
     criteria: CriterionToCheck[],
   ): Promise<CriterionToCheck[]> {
-    // Fail fast if not authenticated — clear error, no thrashing.
-    await this._checkAuth();
+    // Verify the binary is present — fail fast with a clear message.
+    await this._checkBinary();
 
     const now = new Date().toISOString();
 
@@ -144,17 +148,24 @@ export class CopilotCliAdapter implements RuntimeAdapter {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private async _checkAuth(): Promise<void> {
-    const result = await this._spawn(
-      this.cliPath,
-      ["auth", "status"],
-      { timeoutMs: 10_000, stdinNull: true },
-    );
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `GitHub CLI is not authenticated. Run 'gh auth login' to authenticate.\n` +
-        `Output: ${(result.stderr || result.stdout).trim()}`,
+  /** Run `copilot --version` to confirm the binary is accessible. */
+  private async _checkBinary(): Promise<void> {
+    try {
+      const result = await this._spawn(
+        this.cliPath,
+        ["--version"],
+        { timeoutMs: 5_000, stdinNull: true },
       );
+      if (result.exitCode !== 0 && result.exitCode !== -1) {
+        throw new Error(
+          `'${this.cliPath} --version' exited ${result.exitCode}: ${result.stderr.trim()}`,
+        );
+      }
+    } catch (err: unknown) {
+      const msg = (err as { code?: string; message?: string }).code === "ENOENT"
+        ? `Copilot CLI binary not found: '${this.cliPath}'. Install from https://docs.github.com/copilot/how-tos/copilot-cli`
+        : `Copilot CLI is not accessible: ${err}`;
+      throw new Error(msg);
     }
   }
 
@@ -164,16 +175,33 @@ export class CopilotCliAdapter implements RuntimeAdapter {
     criterion: CriterionToCheck,
   ): Promise<boolean> {
     const prompt = this._buildPrompt(taskId, columnId, criterion.description);
+    const result = await this._spawn(
+      this.cliPath,
+      ["-p", prompt],
+      { timeoutMs: this.timeoutMs, stdinNull: true },
+    );
 
-    const suggestion = await this._getSuggestion(prompt);
-    if (!suggestion) {
+    if (result.exitCode === -1) {
       console.warn(
-        `[copilot-cli] No parseable suggestion for criterion '${criterion.id}' — marking unchecked`,
+        `[copilot-cli] criterion '${criterion.id}' timed out after ${this.timeoutMs}ms — FAIL`,
+      );
+      return false;
+    }
+    if (result.exitCode !== 0) {
+      console.warn(
+        `[copilot-cli] criterion '${criterion.id}' exited ${result.exitCode} — FAIL\n${result.stderr.trim()}`,
       );
       return false;
     }
 
-    return this._runValidationCommand(suggestion);
+    const verdict = parseCopilotVerdict(result.stdout);
+    if (verdict === null) {
+      console.warn(
+        `[copilot-cli] criterion '${criterion.id}': no VERDICT found in output — FAIL`,
+      );
+      return false;
+    }
+    return verdict;
   }
 
   private _buildPrompt(
@@ -181,51 +209,24 @@ export class CopilotCliAdapter implements RuntimeAdapter {
     columnId: string,
     criterionDescription: string,
   ): string {
-    const parts: string[] = [
-      `Task '${taskId}' in kanban stage '${columnId}'.`,
+    const lines: string[] = [
+      `You are a software agent validating a kanban task.`,
+      `Task ID: '${taskId}' in stage '${columnId}'.`,
     ];
     if (this.instructions) {
-      parts.push(`Context: ${this.instructions}.`);
+      lines.push(`Project context: ${this.instructions}`);
     }
-    parts.push(
-      `Write a single shell command that exits with code 0 if the following criterion is satisfied,`,
-      `or exits with a non-zero code if it is not.`,
-      `The command must run non-interactively and MUST NOT modify any source files.`,
+    lines.push(
+      ``,
+      `Determine whether the following exit criterion is currently satisfied by examining`,
+      `the project state. DO NOT modify any files.`,
+      `Reply with your reasoning, then end your reply with EXACTLY one of:`,
+      `VERDICT: PASS`,
+      `VERDICT: FAIL`,
+      ``,
       `Criterion: "${criterionDescription}"`,
     );
-    return parts.join(" ");
-  }
-
-  private async _getSuggestion(prompt: string): Promise<string | null> {
-    // Merge NO_COLOR / notifier flags into the parent environment.
-    // We do NOT use process.env directly at the module level (keep it lazy).
-    const baseEnv = _getProcessEnv();
-    const env: Record<string, string> = {
-      ...baseEnv,
-      NO_COLOR: "1",
-      GH_NO_UPDATE_NOTIFIER: "1",
-    };
-
-    const result = await this._spawn(
-      this.cliPath,
-      ["copilot", "suggest", "--target", "shell", prompt],
-      { timeoutMs: this.timeoutMs, stdinNull: true, env },
-    );
-
-    return parseCopilotSuggestion(result.stdout);
-  }
-
-  private async _runValidationCommand(command: string): Promise<boolean> {
-    const isWindows = _isWindows();
-    const shellCmd = isWindows ? "cmd" : "sh";
-    const shellFlag = isWindows ? "/c" : "-c";
-
-    const result = await this._spawn(
-      shellCmd,
-      [shellFlag, command],
-      { timeoutMs: this.timeoutMs, stdinNull: true },
-    );
-    return result.exitCode === 0;
+    return lines.join("\n");
   }
 }
 
@@ -234,63 +235,39 @@ export class CopilotCliAdapter implements RuntimeAdapter {
 // ---------------------------------------------------------------------------
 
 /**
- * Parse the suggested command from `gh copilot suggest` stdout.
+ * Parse the VERDICT from `copilot -p` output.
  *
- * The CLI emits output like:
- *   …
- *   Suggestion:
+ * The standalone Copilot CLI emits output in this shape:
+ *   ● skill(ponytail)
  *
- *     npm test
+ *   <model reply>
+ *   VERDICT: PASS   ← or VERDICT: FAIL
  *
- *   ? Select an option …
+ *   Changes    +0 -0
+ *   AI Credits …
+ *   Tokens     …
+ *   Resume     copilot --resume=…
  *
- * We look for the "Suggestion:" marker, then collect non-empty lines until
- * the interactive prompt ("?") or a blank line after content.
- * Returns null if no suggestion is found.
+ * We scan lines up to the footer (which starts with "Changes", "AI Credits",
+ * "Tokens", or "Resume") and return true for PASS, false for FAIL, null if
+ * the verdict is absent or unparseable.
  */
-export function parseCopilotSuggestion(output: string): string | null {
+export function parseCopilotVerdict(output: string): boolean | null {
+  const footerPattern = /^(Changes|AI Credits|Tokens|Resume)\s/i;
   const lines = output.split("\n");
-  let foundMarker = false;
-  const commandLines: string[] = [];
+
+  let verdict: boolean | null = null;
 
   for (const line of lines) {
-    if (foundMarker) {
-      const trimmed = line.trim();
-      // Stop at interactive prompt lines
-      if (trimmed.startsWith("?") || trimmed.toLowerCase().startsWith("select an option")) {
-        break;
-      }
-      if (trimmed) {
-        commandLines.push(trimmed);
-      } else if (commandLines.length > 0) {
-        // Blank line after we've already collected content — command is done
-        break;
-      }
-    } else if (/suggestion:/i.test(line)) {
-      foundMarker = true;
+    const trimmed = line.trim();
+    if (footerPattern.test(trimmed)) break; // stop at footer
+
+    if (/^VERDICT:\s*PASS$/i.test(trimmed)) {
+      verdict = true;
+    } else if (/^VERDICT:\s*FAIL$/i.test(trimmed)) {
+      verdict = false;
     }
   }
 
-  if (commandLines.length === 0) return null;
-  // Join multi-line commands (e.g. line-continuation) with &&
-  return commandLines.join(" && ");
-}
-
-// ---------------------------------------------------------------------------
-// Platform helpers (lazy to avoid import-time side-effects in tests)
-// ---------------------------------------------------------------------------
-
-function _getProcessEnv(): Record<string, string> {
-  // `process` is available as a global in Node.js and in Deno 2 (Node.js compat).
-  if (typeof process !== "undefined" && process.env) {
-    return process.env as Record<string, string>;
-  }
-  return {};
-}
-
-function _isWindows(): boolean {
-  if (typeof process !== "undefined" && process.platform) {
-    return process.platform === "win32";
-  }
-  return false;
+  return verdict;
 }

@@ -165,14 +165,15 @@ export function ColumnConfig({ open, onOpenChange, column, onSave }: ColumnConfi
                 {runtime === "copilot-cli" && (
                   <div className="flex flex-col gap-2">
                     <p className="text-xs text-muted-foreground">
-                      Requires <code className="font-mono bg-muted px-1 rounded">gh auth login</code> for authentication.
+                      Requires the standalone <code className="font-mono bg-muted px-1 rounded">copilot</code> CLI
+                      (GitHub Copilot CLI). Must already be authenticated.
                     </p>
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-muted-foreground">
-                        gh CLI path <span className="opacity-60">(optional, default: gh)</span>
+                        Copilot CLI path <span className="opacity-60">(optional, default: copilot)</span>
                       </label>
                       <Input value={cliPath} onChange={(e) => setCliPath(e.target.value)}
-                        placeholder="gh" />
+                        placeholder="copilot" />
                     </div>
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-muted-foreground">

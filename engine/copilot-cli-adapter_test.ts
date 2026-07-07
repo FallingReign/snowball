@@ -1,5 +1,5 @@
 import { assertEquals, assertMatch, assertRejects } from "jsr:@std/assert";
-import { CopilotCliAdapter, parseCopilotSuggestion } from "./copilot-cli-adapter.ts";
+import { CopilotCliAdapter, parseCopilotVerdict } from "./copilot-cli-adapter.ts";
 import type { SpawnFn, SpawnResult } from "./copilot-cli-adapter.ts";
 import type { CriterionToCheck } from "./runtime-adapter.ts";
 
@@ -25,58 +25,77 @@ function fail(stderr = "", exitCode = 1): SpawnResult {
   return { stdout: "", stderr, exitCode };
 }
 
-// ---------------------------------------------------------------------------
-// parseCopilotSuggestion
-// ---------------------------------------------------------------------------
-
-Deno.test("parseCopilotSuggestion: returns null for empty output", () => {
-  assertEquals(parseCopilotSuggestion(""), null);
-});
-
-Deno.test("parseCopilotSuggestion: extracts command after 'Suggestion:'", () => {
-  const out = `
-Welcome to GitHub Copilot in the CLI!
-
-Suggestion:
-
-  npm test
-
-? Select an option
-`;
-  assertEquals(parseCopilotSuggestion(out), "npm test");
-});
-
-Deno.test("parseCopilotSuggestion: handles missing suggestion marker", () => {
-  const out = "Welcome to GitHub Copilot\nSomething went wrong\n";
-  assertEquals(parseCopilotSuggestion(out), null);
-});
-
-Deno.test("parseCopilotSuggestion: joins multi-line command with &&", () => {
-  const out = `
-Suggestion:
-
-  cd /tmp
-  npm test
-
-? Select an option
-`;
-  assertEquals(parseCopilotSuggestion(out), "cd /tmp && npm test");
-});
-
-Deno.test("parseCopilotSuggestion: case-insensitive marker", () => {
-  const out = `SUGGESTION:\n\n  echo hello\n`;
-  assertEquals(parseCopilotSuggestion(out), "echo hello");
-});
+function copilotReply(body: string): SpawnResult {
+  // Simulate a full copilot -p response with footer.
+  const footer = [
+    "",
+    "",
+    "Changes    +0 -0",
+    "AI Credits 5.0 (5s)",
+    "Tokens     ↑ 1000 (500 cached) • ↓ 50",
+    "Resume     copilot --resume=abc123",
+  ].join("\n");
+  return ok(`● skill(ponytail)\n\n${body}${footer}`);
+}
 
 // ---------------------------------------------------------------------------
-// CopilotCliAdapter — auth check
+// parseCopilotVerdict
 // ---------------------------------------------------------------------------
 
-Deno.test("CopilotCliAdapter: throws descriptive error when not authenticated", async () => {
-  const adapter = new CopilotCliAdapter(
-    {},
-    mockSpawn([fail("You are not logged into any GitHub hosts.", 1)]),
-  );
+Deno.test("parseCopilotVerdict: returns null for empty output", () => {
+  assertEquals(parseCopilotVerdict(""), null);
+});
+
+Deno.test("parseCopilotVerdict: returns true for VERDICT: PASS", () => {
+  const out = copilotReply("All tests pass.\n\nVERDICT: PASS\n").stdout;
+  assertEquals(parseCopilotVerdict(out), true);
+});
+
+Deno.test("parseCopilotVerdict: returns false for VERDICT: FAIL", () => {
+  const out = copilotReply("Tests are failing.\n\nVERDICT: FAIL\n").stdout;
+  assertEquals(parseCopilotVerdict(out), false);
+});
+
+Deno.test("parseCopilotVerdict: returns null when verdict is missing", () => {
+  const out = copilotReply("I cannot determine this.\n").stdout;
+  assertEquals(parseCopilotVerdict(out), null);
+});
+
+Deno.test("parseCopilotVerdict: stops at footer — verdict after footer is ignored", () => {
+  const out = [
+    "● skill(ponytail)",
+    "",
+    "Some reasoning here.",
+    "",
+    "Changes    +0 -0",
+    "AI Credits 5.0 (5s)",
+    "VERDICT: PASS",  // after footer — should be ignored
+  ].join("\n");
+  assertEquals(parseCopilotVerdict(out), null);
+});
+
+Deno.test("parseCopilotVerdict: case-insensitive", () => {
+  const out = copilotReply("verdict: pass\n").stdout;
+  assertEquals(parseCopilotVerdict(out), true);
+});
+
+Deno.test("parseCopilotVerdict: last VERDICT wins if multiple stand-alone lines", () => {
+  // Parser overwrites on each VERDICT line; last one wins.
+  const out = copilotReply("VERDICT: PASS\nOn reflection:\nVERDICT: FAIL\n").stdout;
+  assertEquals(parseCopilotVerdict(out), false);
+});
+
+// ---------------------------------------------------------------------------
+// CopilotCliAdapter — binary check
+// ---------------------------------------------------------------------------
+
+Deno.test("CopilotCliAdapter: throws clear error when binary missing (ENOENT)", async () => {
+  const spawn: SpawnFn = async (_exe, _args, _opts) => {
+    const err = new Error("spawn copilot ENOENT") as Error & { code: string };
+    err.code = "ENOENT";
+    throw err;
+  };
+  const adapter = new CopilotCliAdapter({}, spawn);
 
   await assertRejects(
     () =>
@@ -84,8 +103,25 @@ Deno.test("CopilotCliAdapter: throws descriptive error when not authenticated", 
         { id: "ec-1", description: "Tests pass", kind: "machine", checked: false },
       ]),
     Error,
-    "not authenticated",
+    "not found",
   );
+});
+
+Deno.test("CopilotCliAdapter: throws clear error when --version exits non-zero", async () => {
+  const adapter = new CopilotCliAdapter(
+    {},
+    mockSpawn([fail("something went wrong", 1)]),
+  );
+
+  let threw = false;
+  try {
+    await adapter.validateMachineCriteria("task1", "col1", [
+      { id: "ec-1", description: "Tests pass", kind: "machine", checked: false },
+    ]);
+  } catch {
+    threw = true;
+  }
+  assertEquals(threw, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -93,8 +129,8 @@ Deno.test("CopilotCliAdapter: throws descriptive error when not authenticated", 
 // ---------------------------------------------------------------------------
 
 Deno.test("CopilotCliAdapter: human criteria pass through unchanged", async () => {
-  // Auth succeeds; no further calls expected
-  const adapter = new CopilotCliAdapter({}, mockSpawn([ok()]));
+  // Only binary check; no further calls
+  const adapter = new CopilotCliAdapter({}, mockSpawn([ok("GitHub Copilot CLI 1.0.68")]));
 
   const criteria: CriterionToCheck[] = [
     { id: "h-1", description: "Human review done", kind: "human", checked: false },
@@ -109,16 +145,15 @@ Deno.test("CopilotCliAdapter: human criteria pass through unchanged", async () =
 });
 
 // ---------------------------------------------------------------------------
-// CopilotCliAdapter — machine criteria validation
+// CopilotCliAdapter — machine criteria validation via VERDICT
 // ---------------------------------------------------------------------------
 
-Deno.test("CopilotCliAdapter: marks machine criterion checked when command exits 0", async () => {
+Deno.test("CopilotCliAdapter: marks criterion checked on VERDICT: PASS", async () => {
   const adapter = new CopilotCliAdapter(
     {},
     mockSpawn([
-      ok(), // auth check
-      ok("Welcome\n\nSuggestion:\n\n  npm test\n\n? Select an option"), // copilot suggest
-      ok(), // validation command
+      ok("GitHub Copilot CLI 1.0.68"), // --version check
+      copilotReply("All tests pass.\n\nVERDICT: PASS"),   // copilot -p
     ]),
   );
 
@@ -131,30 +166,29 @@ Deno.test("CopilotCliAdapter: marks machine criterion checked when command exits
   assertEquals(typeof result[0].checkedAt, "string");
 });
 
-Deno.test("CopilotCliAdapter: leaves machine criterion unchecked when command exits non-zero", async () => {
+Deno.test("CopilotCliAdapter: leaves criterion unchecked on VERDICT: FAIL", async () => {
   const adapter = new CopilotCliAdapter(
     {},
     mockSpawn([
-      ok(), // auth check
-      ok("Suggestion:\n\n  npm test\n"), // copilot suggest
-      fail("Tests failed", 1), // validation command fails
+      ok("GitHub Copilot CLI 1.0.68"), // --version check
+      copilotReply("Tests are failing.\n\nVERDICT: FAIL"), // copilot -p
     ]),
   );
 
   const criteria: CriterionToCheck[] = [
-    { id: "ec-1", description: "All tests pass", kind: "machine", checked: false },
+    { id: "ec-1", description: "All unit tests pass", kind: "machine", checked: false },
   ];
   const result = await adapter.validateMachineCriteria("task1", "col1", criteria);
 
   assertEquals(result[0].checked, false);
 });
 
-Deno.test("CopilotCliAdapter: leaves machine criterion unchecked when no suggestion parseable", async () => {
+Deno.test("CopilotCliAdapter: leaves criterion unchecked when no VERDICT in output", async () => {
   const adapter = new CopilotCliAdapter(
     {},
     mockSpawn([
-      ok(), // auth check
-      ok("Welcome to GitHub Copilot\nError processing request\n"), // no suggestion
+      ok("GitHub Copilot CLI 1.0.68"),
+      copilotReply("I cannot determine this."), // no VERDICT
     ]),
   );
 
@@ -166,12 +200,11 @@ Deno.test("CopilotCliAdapter: leaves machine criterion unchecked when no suggest
   assertEquals(result[0].checked, false);
 });
 
-Deno.test("CopilotCliAdapter: handles timeout (exitCode -1) as failure", async () => {
+Deno.test("CopilotCliAdapter: leaves criterion unchecked on timeout (exitCode -1)", async () => {
   const adapter = new CopilotCliAdapter(
     { timeoutMs: 100 },
     mockSpawn([
-      ok(), // auth check
-      ok("Suggestion:\n\n  npm test\n"), // copilot suggest
+      ok("GitHub Copilot CLI 1.0.68"),
       { stdout: "", stderr: "", exitCode: -1 }, // timeout
     ]),
   );
@@ -183,13 +216,28 @@ Deno.test("CopilotCliAdapter: handles timeout (exitCode -1) as failure", async (
   assertEquals(result[0].checked, false);
 });
 
-Deno.test("CopilotCliAdapter: mixed criteria — machine validated, human unchanged", async () => {
+Deno.test("CopilotCliAdapter: leaves criterion unchecked on non-zero exit", async () => {
   const adapter = new CopilotCliAdapter(
     {},
     mockSpawn([
-      ok(), // auth check
-      ok("Suggestion:\n\n  echo ok\n"), // copilot suggest for ec-1
-      ok(), // validation command exits 0
+      ok("GitHub Copilot CLI 1.0.68"),
+      fail("copilot API error", 1),
+    ]),
+  );
+
+  const criteria: CriterionToCheck[] = [
+    { id: "ec-1", description: "Tests pass", kind: "machine", checked: false },
+  ];
+  const result = await adapter.validateMachineCriteria("task1", "col1", criteria);
+  assertEquals(result[0].checked, false);
+});
+
+Deno.test("CopilotCliAdapter: mixed — machine validated, human unchanged", async () => {
+  const adapter = new CopilotCliAdapter(
+    {},
+    mockSpawn([
+      ok("GitHub Copilot CLI 1.0.68"),
+      copilotReply("Tests pass.\n\nVERDICT: PASS"),
     ]),
   );
 
@@ -199,23 +247,20 @@ Deno.test("CopilotCliAdapter: mixed criteria — machine validated, human unchan
   ];
   const result = await adapter.validateMachineCriteria("task1", "col1", criteria);
 
-  assertEquals(result[0].id, "ec-1");
-  assertEquals(result[0].checked, true);  // machine — validated
-  assertEquals(result[1].id, "ec-2");
-  assertEquals(result[1].checked, false); // human — unchanged
+  assertEquals(result[0].checked, true);   // machine — PASS
+  assertEquals(result[1].checked, false);  // human — unchanged
 });
 
-Deno.test("CopilotCliAdapter: instruction injected into prompt (spawn receives it)", async () => {
-  const calls: string[][] = [];
+Deno.test("CopilotCliAdapter: instructions injected into prompt", async () => {
+  const calls: Array<[string, string[]]> = [];
   const trackingSpawn: SpawnFn = async (exe, args, _opts) => {
-    calls.push([exe, ...args]);
-    if (calls.length === 1) return ok(); // auth check
-    if (calls.length === 2) return ok("Suggestion:\n\n  echo ok\n"); // suggest
-    return ok(); // command
+    calls.push([exe, [...args]]);
+    if (calls.length === 1) return ok("GitHub Copilot CLI 1.0.68");
+    return copilotReply("VERDICT: PASS");
   };
 
   const adapter = new CopilotCliAdapter(
-    { instructions: "context: javascript project" },
+    { instructions: "TypeScript project; tests via deno task test" },
     trackingSpawn,
   );
 
@@ -224,33 +269,34 @@ Deno.test("CopilotCliAdapter: instruction injected into prompt (spawn receives i
   ];
   await adapter.validateMachineCriteria("task1", "col1", criteria);
 
-  // The second call should be to gh copilot suggest with our instructions in the prompt
-  assertEquals(calls[1][0], "gh");
-  assertEquals(calls[1][1], "copilot");
-  assertEquals(calls[1][2], "suggest");
-  assertEquals(calls[1][3], "--target");
-  assertEquals(calls[1][4], "shell");
-  // The prompt (last arg) should contain the instructions
-  assertEquals(calls[1][5].includes("context: javascript project"), true);
+  // Second call is copilot -p <prompt>
+  assertEquals(calls[1][0], "copilot");
+  assertEquals(calls[1][1][0], "-p");
+  assertMatch(calls[1][1][1], /TypeScript project/);
+  assertMatch(calls[1][1][1], /Tests pass/);
+  assertMatch(calls[1][1][1], /VERDICT: PASS/);
+  assertMatch(calls[1][1][1], /VERDICT: FAIL/);
 });
 
-Deno.test("CopilotCliAdapter: adapter name is 'copilot-cli'", () => {
-  const adapter = new CopilotCliAdapter();
-  assertEquals(adapter.name, "copilot-cli");
-});
-
-Deno.test("CopilotCliAdapter: custom cliPath forwarded to spawn", async () => {
-  const calls: string[][] = [];
-  const trackingSpawn: SpawnFn = async (exe, args, _opts) => {
-    calls.push([exe, ...args]);
-    return ok();
+Deno.test("CopilotCliAdapter: custom cliPath forwarded to binary check", async () => {
+  const calls: string[] = [];
+  const trackingSpawn: SpawnFn = async (exe, _args, _opts) => {
+    calls.push(exe);
+    return ok("GitHub Copilot CLI 1.0.68");
   };
 
-  const adapter = new CopilotCliAdapter({ cliPath: "/usr/local/bin/gh" }, trackingSpawn);
-  // Only auth check; no machine criteria to process
+  const adapter = new CopilotCliAdapter(
+    { cliPath: "/opt/copilot/bin/copilot" },
+    trackingSpawn,
+  );
+  // human only — only binary check fires
   await adapter.validateMachineCriteria("t1", "c1", [
     { id: "h1", description: "Human review", kind: "human", checked: false },
   ]);
 
-  assertEquals(calls[0][0], "/usr/local/bin/gh");
+  assertEquals(calls[0], "/opt/copilot/bin/copilot");
+});
+
+Deno.test("CopilotCliAdapter: adapter name is 'copilot-cli'", () => {
+  assertEquals(new CopilotCliAdapter().name, "copilot-cli");
 });

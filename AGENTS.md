@@ -273,28 +273,25 @@ export class CopilotCliAdapter implements RuntimeAdapter {
 ```
 
 **Machine-criteria validation flow:**
-1. Auth check: `gh auth status` (10 s timeout) — throws if not authenticated.
+1. Binary check: `copilot --version` (5 s timeout) — throws a clear error if binary is missing or returns non-zero.
 2. For each machine criterion:
-   a. Builds a natural-language prompt: task context + instructions + criterion text.
-   b. Runs `gh copilot suggest --target shell "<prompt>"` with stdin closed (headless).
-   c. Parses the suggested command from stdout (`parseCopilotSuggestion` helper).
-   d. Runs the command via `sh -c` / `cmd /c` (cross-platform) with timeout.
-   e. Exit code 0 → criterion satisfied; non-zero / timeout → unsatisfied.
+   a. Builds a structured prompt: agent context + optional instructions + criterion text + explicit instruction to end with `VERDICT: PASS` or `VERDICT: FAIL`.
+   b. Runs `copilot -p "<prompt>"` with stdin closed (non-interactive) and a configurable timeout.
+   c. Parses `VERDICT: PASS` / `VERDICT: FAIL` from model output via `parseCopilotVerdict()` (stops at the footer that begins with `Changes`/`AI Credits`/`Tokens`/`Resume`).
+   d. PASS → criterion satisfied; FAIL / no verdict / timeout / non-zero exit → unsatisfied (FAIL).
 3. Human criteria pass through unchanged.
 
-**Headless invocation detail:** `gh copilot suggest --target shell "<prompt>"` is run with `stdin=ignore`.
-The suggestion appears in stdout before the interactive menu; the process may exit with a non-zero
-code when it tries to read from the closed stdin — this is expected and handled. The stdout is always
-captured before the timeout kills the process.
+**No arbitrary shell execution.** The adapter reads Copilot's verdict from the model reply — it does NOT run any shell command from the model output. Safe and bounded.
 
-**Auth requirement:** `gh auth login` must have been run (or `GITHUB_TOKEN` set). The adapter fails
-cleanly with `"GitHub CLI is not authenticated. Run 'gh auth login'…"` when unauthenticated.
+**Headless invocation:** `copilot -p "<prompt>"` with stdin closed. The standalone Copilot CLI 1.0.68 supports this natively; the reply and VERDICT appear before a structured footer section.
 
-**Timeout:** per-call (default 30 s); configurable via `runtime_config.timeout_ms` in workflow.yaml.
-No process can hang unboundedly — kills are via `proc.kill()` after the timeout.
+**Binary presence check:** `copilot --version` (5 s timeout). If `ENOENT`, throws: *"Copilot CLI binary not found: 'copilot'. Install from https://docs.github.com/copilot/how-tos/copilot-cli"*.
 
-**Spawn injection:** `CopilotCliAdapter` accepts an optional `SpawnFn` second constructor argument
-for unit tests. Tests inject a mock and don't require live Copilot or real subprocesses.
+**Already authenticated:** The `copilot` binary is assumed to be authenticated. No `gh auth login` flow is attempted. If auth is missing, `copilot -p` will fail and the criterion is left unsatisfied.
+
+**Timeout:** per-call (default 60 s to accommodate model latency); configurable via `runtime_config.timeout_ms` in workflow.yaml. No process can hang unboundedly — kills via `proc.kill()` after timeout.
+
+**Spawn injection:** `CopilotCliAdapter` accepts an optional `SpawnFn` second constructor argument for unit tests. Tests inject a mock and don't require live Copilot or real subprocesses.
 
 ### workflow.yaml extended schema (Slice B additions)
 
@@ -311,7 +308,7 @@ columns:
         cli_path: gh                # path to gh binary; default: "gh"
         instructions: |             # optional prompt context
           TypeScript project; tests run via `deno task test`.
-        timeout_ms: 30000           # per-call timeout; default: 30000
+        timeout_ms: 60000           # per-call timeout; default: 60000 (model calls ~15 s)
 ```
 
 `runtime` and `runtime_config` are optional and backward-compatible. Existing workflows
