@@ -2,10 +2,19 @@
 // Raw YAML schema types (snake_case — mirrors the .snowball/ file format)
 // ---------------------------------------------------------------------------
 
+export interface RawRuntimeConfig {
+  cli_path?: string;     // path to gh binary; default "gh"
+  model?: string;        // Copilot model name; optional
+  timeout_ms?: number;   // per-call timeout; default 30 000
+  instructions?: string; // additional prompt context for the agent
+}
+
 export interface RawColumnOwner {
   kind: "human" | "agent";
   role?: string;       // only when kind === "agent"
   instances?: number;  // only when kind === "agent"; default 1
+  runtime?: "fake" | "copilot-cli"; // adapter to use; default "fake"
+  runtime_config?: RawRuntimeConfig;  // adapter-specific config
 }
 
 export interface RawExitCriterion {
@@ -64,10 +73,19 @@ export interface RawTask {
 // These mirror src/lib/types.ts exactly so the frontend can import either.
 // ---------------------------------------------------------------------------
 
+export interface RuntimeConfig {
+  cliPath?: string;
+  model?: string;
+  timeoutMs?: number;
+  instructions?: string;
+}
+
 export interface ColumnOwner {
   kind: "human" | "agent";
   role?: string;      // only when kind === "agent"
   instances: number;  // always present (default 1)
+  runtime: "fake" | "copilot-cli";  // always present (default "fake")
+  runtimeConfig: RuntimeConfig;     // always present (default {})
 }
 
 export interface ExitCriterion {

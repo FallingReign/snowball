@@ -8,6 +8,7 @@
 
 export interface CriterionToCheck {
   id: string;
+  description: string;           // human-readable text — adapters use this for prompts
   kind: "machine" | "human";
   checked: boolean;
   checkedAt?: string;

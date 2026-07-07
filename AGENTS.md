@@ -243,5 +243,97 @@ See "Slice A schema additions" section above.
 
 - **Board layering** (parent↔child boards / `links_to` column field): `links_to` is in the
   schema (always `null`) but no behavior is built.
-- **Real AI adapter**: Slice B. Only `FakeRuntimeAdapter` exists.
-- **Agent advance notifications / toast UI**: Slice B. Currently logged to console.
+- **Agent advance notifications / toast UI**: Slice B partially done (console.info logs results);
+  full in-app notification/toast panel is a later slice.
+- **Parallel-worktree orchestration**: `instances` > 1 is stored in config and respected for WIP
+  limit checks on the board, but the runtime does NOT yet fan out to multiple worktrees / parallel
+  agent processes. Each `runAgentOnColumn` invocation processes tasks sequentially. True parallelism
+  (separate git worktrees per instance) is a Slice C item.
+- **pi adapter**: out of scope for Slice B; only `fake` and `copilot-cli` are built.
+
+## Slice B additions (Copilot CLI adapter + runtime selection, 2026-07)
+
+### New engine files
+
+| File | Purpose |
+|------|---------|
+| `engine/copilot-cli-adapter.ts` | `CopilotCliAdapter` — real Copilot CLI adapter |
+| `engine/agent-runner.ts` | `runAgentOnColumn()` — adapter-agnostic gating loop |
+| `engine/adapter-factory.ts` | `createAdapter(owner)` — maps column config to adapter |
+| `engine/copilot-cli-adapter_test.ts` | 15 unit tests (mock spawn injection) |
+
+### CopilotCliAdapter contract
+
+```typescript
+export class CopilotCliAdapter implements RuntimeAdapter {
+  constructor(config?: CopilotCliConfig, spawnFn?: SpawnFn)
+  readonly name = "copilot-cli";
+  validateMachineCriteria(taskId, columnId, criteria): Promise<CriterionToCheck[]>
+}
+```
+
+**Machine-criteria validation flow:**
+1. Auth check: `gh auth status` (10 s timeout) — throws if not authenticated.
+2. For each machine criterion:
+   a. Builds a natural-language prompt: task context + instructions + criterion text.
+   b. Runs `gh copilot suggest --target shell "<prompt>"` with stdin closed (headless).
+   c. Parses the suggested command from stdout (`parseCopilotSuggestion` helper).
+   d. Runs the command via `sh -c` / `cmd /c` (cross-platform) with timeout.
+   e. Exit code 0 → criterion satisfied; non-zero / timeout → unsatisfied.
+3. Human criteria pass through unchanged.
+
+**Headless invocation detail:** `gh copilot suggest --target shell "<prompt>"` is run with `stdin=ignore`.
+The suggestion appears in stdout before the interactive menu; the process may exit with a non-zero
+code when it tries to read from the closed stdin — this is expected and handled. The stdout is always
+captured before the timeout kills the process.
+
+**Auth requirement:** `gh auth login` must have been run (or `GITHUB_TOKEN` set). The adapter fails
+cleanly with `"GitHub CLI is not authenticated. Run 'gh auth login'…"` when unauthenticated.
+
+**Timeout:** per-call (default 30 s); configurable via `runtime_config.timeout_ms` in workflow.yaml.
+No process can hang unboundedly — kills are via `proc.kill()` after the timeout.
+
+**Spawn injection:** `CopilotCliAdapter` accepts an optional `SpawnFn` second constructor argument
+for unit tests. Tests inject a mock and don't require live Copilot or real subprocesses.
+
+### workflow.yaml extended schema (Slice B additions)
+
+```yaml
+columns:
+  - id: in-progress
+    name: In Progress
+    owner:
+      kind: agent
+      role: code-writer
+      instances: 2
+      runtime: copilot-cli          # "fake" | "copilot-cli"; default: "fake"
+      runtime_config:
+        cli_path: gh                # path to gh binary; default: "gh"
+        instructions: |             # optional prompt context
+          TypeScript project; tests run via `deno task test`.
+        timeout_ms: 30000           # per-call timeout; default: 30000
+```
+
+`runtime` and `runtime_config` are optional and backward-compatible. Existing workflows
+default to `runtime: fake`.
+
+### API routes (Slice B additions)
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/agent-advance` | POST | Run configured adapter (fake or copilot-cli) on column |
+
+The `/api/fake-agent-advance` route is preserved for backward compatibility but the UI
+now calls `/api/agent-advance` which reads `owner.runtime` from workflow.yaml.
+
+### Frontend changes (Slice B)
+
+- `ColumnConfig` side sheet: runtime selector (Fake \| Copilot CLI) + CLI path + instructions fields
+- Column badge: shows runtime name next to agent role when non-fake
+- `agentAdvance(columnId)` added to `src/lib/api.ts` (calls `/api/agent-advance`)
+- `onFakeAgentAdvance` prop renamed to `onAgentAdvance` throughout Board/Column/App
+
+### Permissions (updated)
+
+`--allow-run` added to all `deno desktop` invocations in `deno.json` to allow subprocess
+spawning for the Copilot CLI adapter.

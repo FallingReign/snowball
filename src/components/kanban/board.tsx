@@ -18,7 +18,7 @@ interface BoardProps {
   onMove: (taskId: string, newStatus: string) => Promise<void>;
   onUpdateColumn: (columnId: string, update: ColumnConfigPayload) => Promise<void>;
   onUpdateCriteriaChecks: (taskId: string, columnId: string, checks: CriterionCheck[]) => Promise<void>;
-  onFakeAgentAdvance: (columnId: string) => Promise<void>;
+  onAgentAdvance: (columnId: string) => Promise<void>;
 }
 
 interface PendingMove {
@@ -34,7 +34,7 @@ export function Board({
   onMove,
   onUpdateColumn,
   onUpdateCriteriaChecks,
-  onFakeAgentAdvance,
+  onAgentAdvance,
 }: BoardProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -110,7 +110,7 @@ export function Board({
               tasks={tasksByColumn(col)}
               onSelectTask={onSelectTask}
               onUpdateColumn={onUpdateColumn}
-              onFakeAgentAdvance={onFakeAgentAdvance}
+              onAgentAdvance={onAgentAdvance}
             />
           ))}
         </main>

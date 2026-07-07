@@ -61,12 +61,21 @@ export function columnIds(workflow: RawWorkflow): Set<string> {
 
 function toColumnOwner(raw?: RawColumnOwner): ColumnOwner {
   if (!raw || raw.kind === "human") {
-    return { kind: "human", instances: 1 };
+    return { kind: "human", instances: 1, runtime: "fake", runtimeConfig: {} };
   }
   return {
     kind: "agent",
     role: raw.role ?? "",
     instances: raw.instances ?? 1,
+    runtime: raw.runtime ?? "fake",
+    runtimeConfig: raw.runtime_config
+      ? {
+          cliPath: raw.runtime_config.cli_path,
+          model: raw.runtime_config.model,
+          timeoutMs: raw.runtime_config.timeout_ms,
+          instructions: raw.runtime_config.instructions,
+        }
+      : {},
   };
 }
 

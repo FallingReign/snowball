@@ -68,6 +68,7 @@ export const POST: APIRoute = async ({ request }) => {
         const existing = currentChecks.find((c) => c.criterionId === ec.id);
         return {
           id: ec.id,
+          description: ec.description,
           kind: ec.kind,
           checked: existing?.checked ?? false,
           checkedAt: existing?.checkedAt,

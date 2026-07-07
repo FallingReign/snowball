@@ -26,12 +26,23 @@ function newEcId() {
 }
 
 /**
- * ColumnConfig — side sheet for editing a column's owner, WIP limit, and exit criteria.
+ * ColumnConfig — side sheet for editing a column's owner, WIP limit, exit
+ * criteria, and (when agent-owned) the runtime adapter configuration.
  */
 export function ColumnConfig({ open, onOpenChange, column, onSave }: ColumnConfigProps) {
   const [ownerKind, setOwnerKind] = useState<"human" | "agent">(column.owner.kind);
   const [role, setRole] = useState(column.owner.role ?? "");
   const [instances, setInstances] = useState(String(column.owner.instances ?? 1));
+
+  // Runtime config (agent-owned columns only)
+  const [runtime, setRuntime] = useState<"fake" | "copilot-cli">(
+    column.owner.runtime ?? "fake",
+  );
+  const [cliPath, setCliPath] = useState(column.owner.runtimeConfig?.cliPath ?? "");
+  const [instructions, setInstructions] = useState(
+    column.owner.runtimeConfig?.instructions ?? "",
+  );
+
   const [wipLimit, setWipLimit] = useState(
     column.wipLimit !== null ? String(column.wipLimit) : "",
   );
@@ -56,11 +67,28 @@ export function ColumnConfig({ open, onOpenChange, column, onSave }: ColumnConfi
     setError(null);
     try {
       const parsedWip = wipLimit.trim() === "" ? null : parseInt(wipLimit, 10);
+
+      let ownerPayload: ColumnConfigPayload["owner"];
+      if (ownerKind === "human") {
+        ownerPayload = { kind: "human" };
+      } else {
+        ownerPayload = {
+          kind: "agent",
+          role: role.trim(),
+          instances: Math.max(1, parseInt(instances, 10) || 1),
+          runtime,
+          runtime_config: runtime === "copilot-cli"
+            ? {
+                cli_path: cliPath.trim() || undefined,
+                instructions: instructions.trim() || undefined,
+              }
+            : undefined,
+        };
+      }
+
       const payload: ColumnConfigPayload = {
         wip_limit: parsedWip,
-        owner: ownerKind === "human"
-          ? { kind: "human" }
-          : { kind: "agent", role: role.trim(), instances: Math.max(1, parseInt(instances, 10) || 1) },
+        owner: ownerPayload,
         exit_criteria: criteria
           .filter((c) => c.description.trim() !== "")
           .map((c) => ({ id: c.id, description: c.description.trim(), kind: c.kind })),
@@ -79,9 +107,10 @@ export function ColumnConfig({ open, onOpenChange, column, onSave }: ColumnConfi
       <SheetContent side="right" className="w-96 overflow-y-auto flex flex-col gap-5 pt-10">
         <SheetHeader>
           <SheetTitle>Configure: {column.name}</SheetTitle>
-          <SheetDescription>Set owner, WIP limit, and exit criteria.</SheetDescription>
+          <SheetDescription>Set owner, runtime, WIP limit, and exit criteria.</SheetDescription>
         </SheetHeader>
 
+        {/* ── Owner ─────────────────────────────────────────────────── */}
         <section className="flex flex-col gap-3">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Owner</span>
           <div className="flex gap-2">
@@ -92,15 +121,73 @@ export function ColumnConfig({ open, onOpenChange, column, onSave }: ColumnConfi
               </Button>
             ))}
           </div>
+
           {ownerKind === "agent" && (
-            <div className="flex flex-col gap-2">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Role</label>
-                <Input value={role} onChange={(e) => setRole(e.target.value)} placeholder="e.g. code-writer" />
+            <div className="flex flex-col gap-3">
+              {/* Role + instances */}
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Role</label>
+                  <Input value={role} onChange={(e) => setRole(e.target.value)}
+                    placeholder="e.g. code-writer" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Max parallel instances</label>
+                  <Input type="number" min={1} value={instances}
+                    onChange={(e) => setInstances(e.target.value)} />
+                </div>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Max parallel instances</label>
-                <Input type="number" min={1} value={instances} onChange={(e) => setInstances(e.target.value)} />
+
+              <Separator />
+
+              {/* Runtime selection */}
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Runtime</span>
+                <div className="flex gap-2">
+                  {([
+                    { value: "fake", label: "Fake (dev/test)" },
+                    { value: "copilot-cli", label: "Copilot CLI" },
+                  ] as const).map(({ value, label }) => (
+                    <Button key={value} size="sm"
+                      variant={runtime === value ? "default" : "outline"}
+                      onClick={() => setRuntime(value)} type="button">
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+
+                {runtime === "fake" && (
+                  <p className="text-xs text-muted-foreground">
+                    Fake adapter: machine criteria are always marked satisfied. Safe for dev and testing.
+                  </p>
+                )}
+
+                {runtime === "copilot-cli" && (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      Requires <code className="font-mono bg-muted px-1 rounded">gh auth login</code> for authentication.
+                    </p>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">
+                        gh CLI path <span className="opacity-60">(optional, default: gh)</span>
+                      </label>
+                      <Input value={cliPath} onChange={(e) => setCliPath(e.target.value)}
+                        placeholder="gh" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">
+                        Instructions <span className="opacity-60">(optional, injected into every prompt)</span>
+                      </label>
+                      <textarea
+                        value={instructions}
+                        onChange={(e) => setInstructions(e.target.value)}
+                        placeholder="e.g. This is a TypeScript project using Deno. Tests run via `deno task test`."
+                        rows={3}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -108,6 +195,7 @@ export function ColumnConfig({ open, onOpenChange, column, onSave }: ColumnConfi
 
         <Separator />
 
+        {/* ── WIP Limit ─────────────────────────────────────────────── */}
         <section className="flex flex-col gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">WIP Limit</span>
           <Input type="number" min={1} value={wipLimit}
@@ -116,10 +204,11 @@ export function ColumnConfig({ open, onOpenChange, column, onSave }: ColumnConfi
 
         <Separator />
 
+        {/* ── Exit Criteria ─────────────────────────────────────────── */}
         <section className="flex flex-col gap-3">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Exit Criteria</span>
           {criteria.length === 0 && (
-            <p className="text-xs text-muted-foreground">No criteria yet - cards leave freely.</p>
+            <p className="text-xs text-muted-foreground">No criteria yet — cards leave freely.</p>
           )}
           {criteria.map((ec, i) => (
             <div key={ec.id} className="flex flex-col gap-1.5 rounded-md border p-2">

@@ -1,7 +1,16 @@
+export interface RuntimeConfig {
+  cliPath?: string;
+  model?: string;
+  timeoutMs?: number;
+  instructions?: string;
+}
+
 export interface ColumnOwner {
   kind: "human" | "agent";
   role?: string;      // only when kind === "agent"
   instances: number;  // always present (default 1)
+  runtime: "fake" | "copilot-cli";  // always present (default "fake")
+  runtimeConfig: RuntimeConfig;     // always present (default {})
 }
 
 export interface ExitCriterion {

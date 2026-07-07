@@ -11,10 +11,15 @@ interface ColumnProps {
   tasks: Task[];
   onSelectTask: (task: Task) => void;
   onUpdateColumn: (columnId: string, update: ColumnConfigPayload) => Promise<void>;
-  onFakeAgentAdvance: (columnId: string) => Promise<void>;
+  onAgentAdvance: (columnId: string) => Promise<void>;
 }
 
-export function Column({ column, tasks, onSelectTask, onUpdateColumn, onFakeAgentAdvance }: ColumnProps) {
+const RUNTIME_LABELS: Record<string, string> = {
+  fake: "fake",
+  "copilot-cli": "copilot",
+};
+
+export function Column({ column, tasks, onSelectTask, onUpdateColumn, onAgentAdvance }: ColumnProps) {
   const atLimit = column.wipLimit !== null && tasks.length >= column.wipLimit;
   const [configOpen, setConfigOpen] = useState(false);
   const [agentRunning, setAgentRunning] = useState(false);
@@ -24,7 +29,7 @@ export function Column({ column, tasks, onSelectTask, onUpdateColumn, onFakeAgen
   async function handleAgentRun() {
     setAgentRunning(true);
     try {
-      await onFakeAgentAdvance(column.id);
+      await onAgentAdvance(column.id);
     } finally {
       setAgentRunning(false);
     }
@@ -49,11 +54,16 @@ export function Column({ column, tasks, onSelectTask, onUpdateColumn, onFakeAgen
               {column.name}
             </h2>
             <div className="flex items-center gap-0.5">
-              {/* Owner badge */}
+              {/* Owner + runtime badge */}
               {column.owner.kind === "agent" && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">
                   <BotIcon className="size-3" />
                   {column.owner.role || "agent"}
+                  {column.owner.runtime && column.owner.runtime !== "fake" && (
+                    <span className="ml-0.5 opacity-70">
+                      · {RUNTIME_LABELS[column.owner.runtime] ?? column.owner.runtime}
+                    </span>
+                  )}
                 </span>
               )}
               {/* Config gear */}
@@ -100,7 +110,7 @@ export function Column({ column, tasks, onSelectTask, onUpdateColumn, onFakeAgen
             ].join(" ")}
           >
             <PlayIcon className="size-3" />
-            {agentRunning ? "Running..." : "Run Agent"}
+            {agentRunning ? "Running…" : "Run Agent"}
           </button>
         )}
       </section>
